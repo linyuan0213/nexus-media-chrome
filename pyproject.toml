@@ -1,15 +1,94 @@
 [project]
-name = "nas-tools-chrome"
-version = "2.0.0"
-description = "Add your description here"
+name = "nexus-media-chrome"
+version = "2.1.0"
+description = "Nexus Media Chrome Service - Browser automation service for Nexus Media"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "drissionpage>=4.1.1.2",
+    "drissionpage>=4.2.0b14",
     "fake-useragent>=2.2.0",
     "fastapi>=0.122.0",
+    "httpx>=0.28.0",
     "loguru>=0.7.3",
     "pydantic>=2.12.5",
     "pyquery>=2.0.1",
     "uvicorn>=0.38.0",
+    "websockify>=0.10.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.15.0",
+    "pyright>=1.1.409",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+exclude = [
+    ".git",
+    ".venv",
+    "__pycache__",
+    "*.egg-info",
+    "build",
+    "dist",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",  # pycodestyle errors
+    "F",  # Pyflakes
+    "I",  # isort
+    "S110",  # try-except-pass (do not silently swallow exceptions)
+]
+ignore = [
+    "S101",  # assert
+    "S311",  # pseudo-random generators
+    "S404",  # subprocess
+    "S603",  # subprocess-without-shell-equals-true
+    "S607",  # start-process-with-partial-path
+    "S608",  # hardcoded-sql-expression
+]
+
+[tool.ruff.lint.per-file-ignores]
+"src/config/settings.py" = ["E501"]
+"tests/test_challenge.py" = ["E501"]
+"tests/test_challenge_resolve.py" = ["E501"]
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.11"
+strict = ["src/**/*.py"]
+exclude = [".venv", "__pycache__", "third_party"]
+reportMissingImports = true
+reportMissingTypeStubs = false
+reportUnusedImport = true
+reportOptionalMemberAccess = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v"
+filterwarnings = [
+    "ignore::DeprecationWarning:starlette.*",
+]
+
+[tool.coverage.run]
+source_pkgs = ["src"]
+omit = [
+    "tests/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
 ]

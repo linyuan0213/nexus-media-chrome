@@ -1,0 +1,17 @@
+.git
+.github
+*.deb
+*.so
+patched_libs
+.pytest_cache
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+.venv
+.env
+*.md
+!README.md
+.ruff_cache
+.coverage
+.playwright-mcp

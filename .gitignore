@@ -163,3 +163,9 @@ cython_debug/
 
 test.text
 .vscode
+
+# Project-specific
+.playwright-mcp/
+*.deb
+libvk_swiftshader_patched.so
+page-snapshot.md
