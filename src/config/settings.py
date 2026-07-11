@@ -2,6 +2,8 @@
 
 import os
 import platform
+import tomllib
+from pathlib import Path
 from typing import Any, Dict, List
 
 _IS_WINDOWS = platform.system() == "Windows"
@@ -372,7 +374,16 @@ CHROME_PATH = os.getenv("CHROME_PATH", _DEFAULT_CHROME)
 HEADLESS_MODE = os.getenv("HEADLESS_MODE", "")
 REMOTE_CHROME_ADDRESS = os.getenv("REMOTE_CHROME_ADDRESS", "")  # 如 127.0.0.1:9222
 BROWSER_MONITOR_INTERVAL = 10
-APP_VERSION = os.getenv("APP_VERSION", "2.1.0")
+def _read_version() -> str:
+    pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
+    try:
+        with open(pyproject, "rb") as f:
+            return tomllib.load(f)["project"]["version"]
+    except (OSError, KeyError):
+        return "0.0.0"
+
+
+APP_VERSION = os.getenv("APP_VERSION", _read_version())
 USER_DATA_PATH = os.getenv("USER_DATA_PATH", os.path.join(os.path.expanduser("~"), ".cache", "nexus-media-chrome", "user_data"))
 
 # HTTP 客户端配置

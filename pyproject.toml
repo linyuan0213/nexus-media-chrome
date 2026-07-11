@@ -1,6 +1,6 @@
 [project]
 name = "nexus-media-chrome"
-version = "2.1.0"
+version = "3.0.0"
 description = "Nexus Media Chrome Service - Browser automation service for Nexus Media"
 readme = "README.md"
 requires-python = ">=3.11"
