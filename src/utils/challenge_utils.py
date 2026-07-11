@@ -1,9 +1,9 @@
 """挑战检测和处理工具"""
 from typing import Tuple
 
-from DrissionPage.items import MixTab
+from DrissionPage._pages.chromium_tab import ChromiumTab
 from loguru import logger
-from pyquery import PyQuery
+from pyquery import PyQuery as pq  # type: ignore[import-untyped]
 
 from src.config.settings import CHALLENGE_BOX_SELECTORS, CHALLENGE_SELECTORS, CHALLENGE_TITLES
 
@@ -22,15 +22,15 @@ def under_challenge(html_text: str) -> bool:
     if not html_text:
         return False
         
-    page_title = PyQuery(html_text)('title').text()
+    page_title = str(pq(html_text)('title').text()).lower()  # type: ignore
     logger.debug(f"under_challenge page_title={page_title}")
     
     for title in CHALLENGE_TITLES:
-        if page_title.lower() == title.lower():
+        if page_title == title.lower():
             return True
             
     for selector in CHALLENGE_SELECTORS:
-        html_doc = PyQuery(html_text)
+        html_doc = pq(html_text)
         if html_doc(selector):
             return True
             
@@ -51,14 +51,14 @@ def under_box_challenge(html_text: str) -> bool:
         return False
         
     for selector in CHALLENGE_BOX_SELECTORS:
-        html_doc = PyQuery(html_text)
+        html_doc = pq(html_text)
         if html_doc(selector):
             return True
             
     return False
 
 
-def sync_cf_retry(page: MixTab, tries: int = 5) -> Tuple[bool, bool]:
+def sync_cf_retry(page: ChromiumTab, tries: int = 5) -> Tuple[bool, bool]:
     """
     同步重试CloudFlare挑战解决
     
@@ -85,13 +85,13 @@ def sync_cf_retry(page: MixTab, tries: int = 5) -> Tuple[bool, bool]:
                 success = True
                 break
                 
-            cf_solution = page.ele('tag:input@name=cf-turnstile-response', timeout=3)
-            cf_wrapper = cf_solution.parent()
-            cf_iframe = cf_wrapper.shadow_root.ele("tag:iframe", timeout=3)
+            cf_solution = page.ele('tag:input@name=cf-turnstile-response', timeout=3)  # type: ignore[union-attr]
+            cf_wrapper = cf_solution.parent()  # type: ignore[union-attr]
+            cf_iframe = cf_wrapper.shadow_root.ele("tag:iframe", timeout=3)  # type: ignore[union-attr]
 
-            box = cf_iframe.ele('tag:body').shadow_root
-            cf_button = box.ele("tag:input")
-            cf_button.click()
+            box = cf_iframe.ele('tag:body').shadow_root  # type: ignore[union-attr]
+            cf_button = box.ele("tag:input")  # type: ignore[union-attr]
+            cf_button.click()  # type: ignore[union-attr]
             
         except Exception as e:
             page.wait(1)
@@ -106,7 +106,7 @@ def sync_cf_retry(page: MixTab, tries: int = 5) -> Tuple[bool, bool]:
     return success, cf
 
 
-def sync_cf_box_retry(page: MixTab, tries: int = 3) -> Tuple[bool, bool]:
+def sync_cf_box_retry(page: ChromiumTab, tries: int = 3) -> Tuple[bool, bool]:
     """
     同步重试CloudFlare盒子挑战解决
     
@@ -139,27 +139,27 @@ def sync_cf_box_retry(page: MixTab, tries: int = 3) -> Tuple[bool, bool]:
         
         try:
             # 等待cf-turnstile-response元素可用，增加超时时间
-            cf_solution = page.ele('tag:input@name=cf-turnstile-response', timeout=10)
+            cf_solution = page.ele('tag:input@name=cf-turnstile-response', timeout=10)  # type: ignore[union-attr]
             if not cf_solution:
                 logger.debug("cf-turnstile-response element not found, waiting longer...")
                 page.wait(3)
-                cf_solution = page.ele('tag:input@name=cf-turnstile-response', timeout=10)
+                cf_solution = page.ele('tag:input@name=cf-turnstile-response', timeout=10)  # type: ignore[union-attr]
                 if not cf_solution:
                     logger.debug("cf-turnstile-response element still not found after additional wait")
                     # 如果找不到元素，等待更长时间再重试
                     page.wait(5)
                     continue
             
-            cf_wrapper = cf_solution.parent()
-            cf_iframe = cf_wrapper.shadow_root.ele("tag:iframe", timeout=10)
+            cf_wrapper = cf_solution.parent()  # type: ignore[union-attr]
+            cf_iframe = cf_wrapper.shadow_root.ele("tag:iframe", timeout=10)  # type: ignore[union-attr]
 
-            box = cf_iframe.ele('tag:body').shadow_root
+            box = cf_iframe.ele('tag:body').shadow_root  # type: ignore[union-attr]
             
             # 等待挑战按钮可用
             cf_button = None
             for _ in range(5):  # 最多重试5次等待按钮
                 try:
-                    cf_button = box.ele("tag:input", timeout=3)
+                    cf_button = box.ele("tag:input", timeout=3)  # type: ignore[union-attr]
                     if cf_button:
                         break
                     page.wait(1)
@@ -167,7 +167,7 @@ def sync_cf_box_retry(page: MixTab, tries: int = 3) -> Tuple[bool, bool]:
                     page.wait(1)
             
             if cf_button:
-                cf_button.click()
+                cf_button.click()  # type: ignore[union-attr]
                 logger.debug("CloudFlare challenge button clicked")
             else:
                 logger.debug("CloudFlare challenge button not found")
@@ -175,7 +175,7 @@ def sync_cf_box_retry(page: MixTab, tries: int = 3) -> Tuple[bool, bool]:
             # 等待挑战完成
             for _ in range(10):  # 最多等待10秒
                 try:
-                    visibility = box.ele('tag:div@id=success').style('visibility')
+                    visibility = box.ele('tag:div@id=success').style('visibility')  # type: ignore[union-attr]
                     if visibility == 'visible':
                         success = True
                         logger.debug("CloudFlare challenge completed successfully")

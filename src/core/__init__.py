@@ -1,1 +1,1 @@
-"""Core functionality for NAS Tools Chrome Server."""
+"""Core functionality for Nexus Media Chrome Server."""

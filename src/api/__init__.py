@@ -1,1 +1,1 @@
-"""API routes and endpoints for NAS Tools Chrome Server."""
+"""API routes and endpoints for Nexus Media Chrome Server."""

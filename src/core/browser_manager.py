@@ -1,252 +1,228 @@
-"""浏览器管理和自动化功能"""
+"""浏览器管理和自动化功能 — subprocess 启 Chrome + DrissionPage 连接。"""
+
 import asyncio
 import os
-import platform
-from contextlib import asynccontextmanager
-from typing import Dict, Optional
+import socket
+import subprocess
+import threading
+import time as _time
+from typing import IO, List, Optional
 
 from DrissionPage import Chromium, ChromiumOptions
-from DrissionPage.items import MixTab
-from fake_useragent import UserAgent
 from loguru import logger
 
-from src.config.settings import JS_SCRIPT, BROWSER_MONITOR_INTERVAL, CHROME_PATH, USER_DATA_PATH
+from src.config.settings import (
+    BROWSER_MONITOR_INTERVAL,
+    CHROME_PATH,
+    DEFAULT_FINGERPRINT_PROFILE,
+    HEADLESS_MODE,
+    REMOTE_CHROME_ADDRESS,
+    USER_DATA_PATH,
+)
+from src.core.fingerprint import FingerprintManager
+
+XVFB_DISPLAY = ":99"
+DEBUG_PORT = 9222
+
+
+def _build_chrome_args(profile_name: Optional[str] = None) -> List[str]:
+    """根据指纹 profile 构建 Chrome 启动参数。"""
+    os.makedirs(USER_DATA_PATH, exist_ok=True)
+    fp = FingerprintManager(profile_name)
+    args: List[str] = []
+    if HEADLESS_MODE:
+        args.append(HEADLESS_MODE)
+    args.extend([
+        f"--user-data-dir={USER_DATA_PATH}",
+        "--no-sandbox",
+        "--no-zygote",
+        "--disable-dev-shm-usage",
+        "--disable-setuid-sandbox",
+        f"--remote-debugging-port={DEBUG_PORT}",
+        "--remote-allow-origins=*",
+        "--window-size=1920,1080",
+        "--disable-blink-features=AutomationControlled",
+        "--disable-gpu",
+        "--disable-software-rasterizer",
+        "--use-angle=swiftshader-webgl",
+        "--use-gl=swiftshader-webgl",
+        "--no-first-run",
+        "--disable-background-networking",
+        "--disable-default-apps",
+        "--disable-hang-monitor",
+        "--disable-popup-blocking",
+        "--disable-prompt-on-repost",
+        "--disable-sync",
+        "--metrics-recording-only",
+        "--password-store=basic",
+        "--disable-component-extensions-with-background-pages",
+        "--lang=zh-CN",
+        "--accept-lang=zh-CN,zh,en-US,en",
+    ])
+    args.extend(fp.get_browser_args())
+    disable_features = fp.get_disable_features()
+    if disable_features:
+        args.append(f"--disable-features={','.join(disable_features)}")
+    return args
+
+
+def _wait_for_port(port: int, timeout: int = 10) -> bool:
+    """等待 Chrome 端口可用。"""
+    deadline = _time.monotonic() + timeout
+    while _time.monotonic() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=1):
+                return True
+        except OSError:
+            _time.sleep(0.5)
+    return False
+
+
+def _wait_for_xvfb_socket(timeout: int = 10) -> bool:
+    """等待 Xvfb 的 Unix socket 就绪。"""
+    socket_path = f"/tmp/.X11-unix/X{int(XVFB_DISPLAY.lstrip(':'))}"
+    deadline = _time.monotonic() + timeout
+    while _time.monotonic() < deadline:
+        if os.path.exists(socket_path):
+            return True
+        _time.sleep(0.5)
+    return False
 
 
 class BrowserManager:
-    """管理浏览器实例和标签页操作"""
-    
     def __init__(self):
-        self.chromium_options = self._create_chromium_options()
-        self.dp = Chromium(self.chromium_options)
-        self.lock = asyncio.Lock()
-        self.tabs_pool: Dict[str, MixTab] = {}
-        self._monitor_task = None
+        self._browser: Optional[Chromium] = None
+        self._chrome_proc: Optional[subprocess.Popen[bytes]] = None
+        self._chrome_stderr: Optional[IO[str]] = None
+        self._xvfb_proc: Optional[subprocess.Popen[bytes]] = None
+        self._init_lock = threading.Lock()
+        self._monitor_task: Optional[asyncio.Task[None]] = None
+        self._is_remote = bool(REMOTE_CHROME_ADDRESS)
 
-    def _create_chromium_options(self) -> ChromiumOptions:
-        """配置Chromium浏览器选项"""
-        ua = UserAgent(browsers=['Edge', 'Chrome'], os=['Linux'])
-        co = ChromiumOptions()
-        
-        # 基础配置
-        # co.set_argument('--disable-webgl')
-        co.set_argument('--disable-gpu')
-        co.set_argument('--lang=zh-CN.UTF-8')
-        # 移除headless模式，以便noVNC可以显示
-        co.set_argument('--no-headless')
-        
-        # 新增Chrome参数
-        co.set_argument('--no-first-run')
-        co.set_argument('--force-color-profile=srgb')
-        # 禁用指标记录和报告，减少browsermetrics文件生成
-        co.set_argument('--disable-metrics')
-        co.set_argument('--disable-metrics-reporting')
-        co.set_argument('--disable-breakpad')
-        co.set_argument('--disable-background-networking')
-        co.set_argument('--no-report-upload')
-        co.set_argument('--password-store=basic')
-        co.set_argument('--use-mock-keychain')
-        co.set_argument('--export-tagged-pdf')
-        co.set_argument('--no-default-browser-check')
-        co.set_argument('--disable-background-mode')
-        co.set_argument('--enable-features=NetworkService,NetworkServiceInProcess,LoadCryptoTokenExtension,PermuteTLSExtensions')
-        co.set_argument('--disable-features=FlashDeprecationWarning,EnablePasswordsAccountStorage,UMA')
-        co.set_argument('--deny-permission-prompts')
-        # 语言设置 - 使用完整的区域设置格式
-        co.set_argument('--accept-lang=zh-CN,zh-CN.UTF-8,zh,en-US,en')
-        co.set_argument('--force-language=zh-CN')
-        co.set_argument('--force-lang=zh-CN.UTF-8')
-        
-        # Linux系统特定配置
-        if platform.system() == "Linux":
-            co.set_argument('--no-sandbox')
-            co.set_argument('--disable-dev-shm-usage')
+    def _start_xvfb(self) -> None:
+        if "DISPLAY" in os.environ:
+            # Xvfb 已在外部启动，等待 socket 就绪
+            _wait_for_xvfb_socket(timeout=10)
+            return
+        try:
+            result = subprocess.run(["pgrep", "-f", f"Xvfb {XVFB_DISPLAY}"], capture_output=True)
+            if result.returncode == 0:
+                os.environ["DISPLAY"] = XVFB_DISPLAY
+                _wait_for_xvfb_socket(timeout=10)
+                return
+        except Exception:
+            logger.debug("Xvfb 进程检测失败，准备启动新实例")
+        self._xvfb_proc = subprocess.Popen(
+            ["Xvfb", XVFB_DISPLAY, "-screen", "0", "1920x1080x24", "-ac"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        os.environ["DISPLAY"] = XVFB_DISPLAY
+        _wait_for_xvfb_socket(timeout=10)
 
-        co.set_user_data_path(USER_DATA_PATH)
+    def _stop_xvfb(self) -> None:
+        if self._xvfb_proc:
+            self._xvfb_proc.terminate()
+            self._xvfb_proc = None
 
-        # 设置自定义浏览器路径（如果提供）
-        if CHROME_PATH:
-            co.set_browser_path(CHROME_PATH)
-        
-        # 设置浏览器首选项（语言相关）
-        # 使用set_pref方法设置单个首选项
-        co.set_pref('intl.accept_languages', 'zh-CN,zh,en-US,en')
-        co.set_pref('spellcheck.dictionary', 'zh-CN')
-        co.set_pref('browser.enable_spellchecking', True)
-        co.set_pref('browser.spellcheck.dictionary', 'zh-CN')
-        co.set_pref('translate.enabled', False)  # 禁用自动翻译
-        co.set_pref('intl.selected_languages', 'zh-CN')
-        co.set_pref('intl.locale.requested', 'zh-CN')
-        
-        # 设置随机User-Agent
-        # co.set_user_agent(ua.random)
-        return co
+    @property
+    def browser(self) -> Chromium:
+        if self._browser is None or not self._browser.states.is_alive:
+            self._ensure_browser()
+        assert self._browser is not None
+        return self._browser
+
+    def _ensure_browser(self) -> None:
+        with self._init_lock:
+            if self._browser is not None and self._browser.states.is_alive:
+                return
+            if self._is_remote:
+                co = ChromiumOptions()
+                co.set_address(REMOTE_CHROME_ADDRESS)
+                self._browser = Chromium(co)
+            else:
+                self._start_chrome()
+                co = ChromiumOptions()
+                co.set_local_port(DEBUG_PORT)
+                self._browser = Chromium(co)
+            logger.info(f"Chrome {self._browser.version}")
+
+    def _start_chrome(self) -> None:
+        if self._chrome_proc and self._chrome_proc.poll() is None:
+            return
+        # 清理可能残留的 Chrome 进程
+        if self._chrome_proc is not None:
+            try:
+                self._chrome_proc.terminate()
+                self._chrome_proc.wait(timeout=3)
+            except Exception:
+                logger.debug("终止残留 Chrome 进程失败，继续启动新实例")
+            self._chrome_proc = None
+        self._start_xvfb()
+        chrome = CHROME_PATH or "/opt/google/chrome/google-chrome"
+        env = os.environ.copy()
+        env["TZ"] = "Asia/Shanghai"
+        args = [chrome, *_build_chrome_args(DEFAULT_FINGERPRINT_PROFILE), "about:blank"]
+        logger.debug(f"启动 Chrome 参数: {args}")
+        # 将 Chrome stderr 写入日志文件，便于诊断崩溃原因
+        chrome_stderr_path = "/var/log/chrome_stderr.log"
+        os.makedirs(os.path.dirname(chrome_stderr_path), exist_ok=True)
+        self._chrome_stderr = open(chrome_stderr_path, "w")
+        self._chrome_proc = subprocess.Popen(
+            args,
+            stdout=subprocess.DEVNULL,
+            stderr=self._chrome_stderr,
+            env=env,
+        )
+        if not _wait_for_port(DEBUG_PORT, timeout=30):
+            logger.warning("Chrome 调试端口未在 30 秒内就绪")
+        _time.sleep(1)
+
+    @property
+    def is_alive(self) -> bool:
+        try:
+            if self._browser is None:
+                return False
+            return bool(self._browser.states.is_alive)
+        except Exception:
+            return False
 
     async def monitor_browser(self):
-        """定期监控浏览器状态"""
         while True:
             await asyncio.sleep(BROWSER_MONITOR_INTERVAL)
-            if not self.dp.states.is_alive:
-                logger.warning("检测到浏览器异常")
-                async with self.lock:
-                    # 释放旧浏览器资源
+            if self._browser and not self._browser.states.is_alive:
+                logger.warning("浏览器异常重启")
+                with self._init_lock:
                     try:
-                        self.dp.quit()
-                    except Exception as close_err:
-                        logger.error(f"关闭浏览器时出错：{close_err}")
-                    # 创建新实例
-                    self.dp = Chromium(self.chromium_options)
-                    logger.info("浏览器已重启")
+                        self._browser.quit()
+                    except Exception:
+                        logger.debug("关闭异常浏览器实例时出错，忽略并重建")
+                    self._browser = None
 
     async def start_monitoring(self):
-        """启动浏览器监控任务"""
         self._monitor_task = asyncio.create_task(self.monitor_browser())
 
     async def stop_monitoring(self):
-        """停止浏览器监控任务"""
-        if self._monitor_task:
+        if self._monitor_task is not None:
             self._monitor_task.cancel()
             try:
                 await self._monitor_task
             except asyncio.CancelledError:
                 pass
 
-    def create_tab(self, url: str, tab_name: str, cookie: Optional[str] = None, local_storage: Optional[Dict[str, str]] = None, user_agent: Optional[str] = None) -> dict:
-        """创建新的浏览器标签页"""
-        # 检查是否已有同名标签页
-        if tab_name in self.tabs_pool:
-            raise ValueError(f"标签页名称 '{tab_name}' 已存在")
-        
-        logger.debug(f"正在访问: {url}")
-
-        try:
-            # 创建新标签页
-            tab = self.dp.new_tab(url)
-            
-            # 使用none加载模式，但需要在适当时候主动停止加载
-            tab.set.load_mode.none()
-            tab.add_init_js(JS_SCRIPT)
-            
-            # 设置User-Agent（如果提供）
-            if user_agent:
-                tab.set.user_agent(user_agent)
-                logger.debug(f"已设置自定义User-Agent: {user_agent}")
-            
-            # 设置cookie（如果提供）
-            if cookie:
-                tab.set.cookies(cookie)
-            
-            # 设置local_storage（如果提供）
-            if local_storage:
-                for key, value in local_storage.items():
-                    tab.set.local_storage(key, value)
-            
-            # 访问URL
-            tab.get(url)
-            
-            # 等待页面基本加载完成（DOMContentLoaded）
-            try:
-                # 等待页面标题出现或body元素存在，最多等待15秒
-                tab.wait.ele_displayed('tag:body', timeout=15)
-            except Exception as load_timeout:
-                logger.warning(f"页面基本元素加载较慢: {load_timeout}")
-            
-            # 主动停止加载，防止页面无限转圈
-            tab.stop_loading()
-            
-            # 额外等待1秒确保页面稳定
-            tab.wait(1)
-
-            # 将标签页添加到池中
-            self.tabs_pool[tab_name] = tab
-
-            return {"code": 0, "message": "标签页创建成功", "tab_name": tab_name}
-
-        except Exception as e:
-            # 捕获异常并记录日志
-            logger.error(f"创建标签页 {tab_name} 时出错: {e}")
-
-            # 如果标签页已部分创建但失败，确保清理资源
-            if 'tab' in locals() and tab:
-                try:
-                    tab.close()
-                    logger.info(f"异常中已关闭标签页: {tab_name}")
-                except Exception as cleanup_error:
-                    logger.error(f"清理标签页 {tab_name} 时出错: {cleanup_error}")
-
-            # 返回适当的错误响应
-            raise RuntimeError(f"创建标签页失败，内部错误: {e}")
-
-    def get_tab_html(self, tab: MixTab) -> str:
-        """从标签页获取HTML内容"""
-        from src.utils.challenge_utils import sync_cf_box_retry
-        
-        # 处理CloudFlare挑战
-        sync_cf_box_retry(tab)
-        
-        # 确保页面加载完成
-        try:
-            # 等待页面基本稳定
-            tab.wait(1)
-            
-            # 检查页面是否还在加载
-            if tab.states.is_loading:
-                logger.debug(f"页面仍在加载，主动停止: {tab.url}")
-                tab.stop_loading()
-            
-            # 额外等待确保页面稳定
-            tab.wait(0.5)
-            
-        except Exception as e:
-            logger.warning(f"等待页面稳定时出错: {e}")
-            # 即使出错也继续获取HTML
-        
-        # 最终停止加载并获取HTML
-        tab.stop_loading()
-        html = tab.html
-        logger.debug(f"成功获取网站 {tab.url} 的HTML，长度: {len(html)} 字符")
-        return html
-
-    def click_element(self, tab: MixTab, selector: str):
-        """在标签页中点击元素"""
-        from src.utils.challenge_utils import sync_cf_box_retry
-        
-        sync_cf_box_retry(tab)
-        try:
-            tab.ele(selector).click(by_js=None)
-        except Exception as e:
-            logger.error(f"点击元素失败 {selector}: {e}")
-            raise
-
-    def close_tab(self, tab_name: str):
-        """关闭特定标签页"""
-        if tab_name not in self.tabs_pool:
-            raise ValueError(f"标签页 '{tab_name}' 未找到")
-        
-        tab = self.tabs_pool[tab_name]
-        url = tab.url
-        del self.tabs_pool[tab_name]
-        tab.close()
-        logger.debug(f"已关闭页面: {url}")
-
-    def list_tabs(self) -> list:
-        """列出所有活动标签页"""
-        return list(self.tabs_pool.keys())
-
-    def get_tab(self, tab_name: str) -> MixTab:
-        """按名称获取特定标签页"""
-        if tab_name not in self.tabs_pool:
-            raise ValueError(f"标签页 '{tab_name}' 未找到")
-        return self.tabs_pool[tab_name]
-
     async def cleanup(self):
-        """清理浏览器资源"""
         await self.stop_monitoring()
         try:
-            self.dp.quit()
-        except Exception as e:
-            logger.error(f"浏览器清理过程中出错: {e}")
+            if self._browser:
+                self._browser.quit()
+        except Exception:
+            logger.debug("清理浏览器实例时出错，继续释放资源")
+        if self._chrome_proc:
+            self._chrome_proc.terminate()
+            self._chrome_proc = None
+        chrome_stderr = getattr(self, "_chrome_stderr", None)
+        if chrome_stderr and not chrome_stderr.closed:
+            chrome_stderr.close()
+        self._stop_xvfb()
 
 
-# 全局浏览器管理器实例
 browser_manager = BrowserManager()

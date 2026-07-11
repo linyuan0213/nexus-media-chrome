@@ -1,1 +1,1 @@
-"""Configuration module for NAS Tools Chrome Server."""
+"""Configuration module for Nexus Media Chrome Server."""

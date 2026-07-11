@@ -1,1 +1,1 @@
-"""Utility functions for NAS Tools Chrome Server."""
+"""Utility functions for Nexus Media Chrome Server."""
