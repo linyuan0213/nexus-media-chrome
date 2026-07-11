@@ -106,11 +106,6 @@ docker build -t nexus-media-chrome-novnc .
 docker run --shm-size=2g -p 9850:9850 -p 6080:6080 -d nexus-media-chrome-novnc
 ```
 
-2. 运行容器：
-```bash
-docker run --shm-size=2g -p 9850:9850 -p 6080:6080 -d nas-tools-chrome-novnc
-```
-
 ### 网页 VNC 访问
 
 启动容器后，访问 `http://localhost:6080` 查看浏览器会话。
