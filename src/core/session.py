@@ -14,7 +14,6 @@ from src.config.settings import (
     CHALLENGE_TIMEOUT,
     MAX_SESSIONS,
     SESSION_TTL,
-    TURNSTILE_HOOK_JS,
 )
 from src.core.cookie_store import CookieStore
 from src.core.fingerprint import FingerprintManager
