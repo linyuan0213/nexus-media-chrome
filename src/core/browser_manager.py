@@ -39,7 +39,6 @@ def _build_chrome_args(profile_name: Optional[str] = None) -> List[str]:
         "--disable-dev-shm-usage",
         "--disable-setuid-sandbox",
         f"--remote-debugging-port={DEBUG_PORT}",
-        "--remote-allow-origins=*",
         "--window-size=1920,1080",
         "--disable-blink-features=AutomationControlled",
         "--disable-gpu",

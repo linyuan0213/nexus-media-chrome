@@ -394,8 +394,14 @@ class Session:
             self._active_tab_name = next(iter(self._tabs), None)
         try:
             tab.close()
-        except Exception as e:
-            logger.debug(f"[Session:{self.id}] 关闭标签页 {tab_name} 失败: {e}")
+        except Exception:
+            logger.warning(f"[Session:{self.id}] 常规关闭标签页 {tab_name} 失败，尝试 CDP 关闭")
+            try:
+                target_id = getattr(tab, "tab_id", None) or tab._target_id
+                browser_any: Any = self._browser
+                browser_any._run_cdp("Target.CloseTarget", {"targetId": target_id})
+            except Exception:
+                logger.warning(f"[Session:{self.id}] CDP 关闭标签页 {tab_name} 也失败，标签页可能已孤儿")
 
     def close_all_tabs(self) -> None:
         for name in list(self._tabs.keys()):

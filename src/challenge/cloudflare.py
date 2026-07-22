@@ -118,7 +118,7 @@ class CloudflareResolver(ChallengeResolver):
     def _solve_standard(self, tab: ChromiumTab, timeout: int) -> bool:
         """标准 Cloudflare 挑战：尝试点击 Turnstile 复选框。"""
         logger.debug("Cloudflare 标准挑战，尝试点击验证按钮...")
-        tries = max(1, timeout // 5)
+        tries = max(1, min(timeout // 10, 2))
         success, _ = sync_cf_retry(tab, tries=tries)
         if success:
             return True
@@ -128,7 +128,7 @@ class CloudflareResolver(ChallengeResolver):
     def _solve_box(self, tab: ChromiumTab, timeout: int) -> bool:
         """Turnstile 盒子挑战：尝试点击盒子内的验证按钮。"""
         logger.debug("Cloudflare Turnstile 盒子挑战，尝试点击...")
-        tries = max(1, timeout // 5)
+        tries = max(1, min(timeout // 10, 2))
         success, _ = sync_cf_box_retry(tab, tries=tries)
         if success:
             return True
